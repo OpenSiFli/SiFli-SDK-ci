@@ -1,0 +1,100 @@
+name: Sync PR to GitLab MR
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+      - master
+      - develop
+
+jobs:
+  sync-to-gitlab:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref }}
+          
+      - name: 获取PR详情
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const prNumber = context.payload.pull_request.number;
+            const prDetails = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: prNumber
+            });
+            
+            // 获取PR标题、描述和目标分支
+            const prTitle = prDetails.data.title;
+            const prBody = prDetails.data.body || '';
+            const targetBranch = prDetails.data.base.ref;
+            
+            // 输出信息供后续步骤使用
+            core.setOutput("title", prTitle);
+            core.setOutput("body", prBody);
+            core.setOutput("target_branch", targetBranch);
+            core.setOutput("pr_number", prNumber);
+            
+      - name: 推送至GitLab
+        env:
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          PR_TITLE: ${{ steps.pr.outputs.title }}
+          PR_BODY: ${{ steps.pr.outputs.body }}
+          TARGET_BRANCH: ${{ steps.pr.outputs.target_branch }}
+          GITLAB_URL: ${{ secrets.GITLAB_URL }}
+          GITLAB_REPO: ${{ secrets.GITLAB_REPO_PATH }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_API_TOKEN }}
+          GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
+        run: |
+          # 设置Git配置
+          git config --global user.name "SiFli-bot"
+          git config --global user.email "sf-bot@sifli.com"
+          
+          # 创建GitLab分支名称
+          GITLAB_BRANCH="github-pr-${PR_NUMBER}"
+          
+          # 添加GitLab远程仓库（使用token作为用户名）
+          git remote add gitlab https://oauth2:${GITLAB_TOKEN}@${GITLAB_URL}/${GITLAB_REPO}.git
+          
+          # 强制推送当前分支到GitLab，使用特定分支名称
+          git push -f gitlab HEAD:${GITLAB_BRANCH}
+          
+          # 创建GitLab MR
+          # 准备MR描述，包含GitHub PR链接和PR描述
+          MR_DESCRIPTION="从GitHub PR #${PR_NUMBER} 自动同步\n\nGitHub PR链接: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/pull/${PR_NUMBER}\n\n${PR_BODY}\n\n---\n这是一个由机器人自动创建的合并请求。请在GitLab上进行审查，审查通过后将自动进入GitHub PR合并队列。"
+          
+          # 使用GitLab API创建合并请求
+          curl --request POST \
+            --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+            --header "Content-Type: application/json" \
+            --data '{
+              "source_branch": "'${GITLAB_BRANCH}'",
+              "target_branch": "'${TARGET_BRANCH}'",
+              "title": "[From GitHub PR #'${PR_NUMBER}'] '${PR_TITLE}'",
+              "description": "'${MR_DESCRIPTION}'",
+              "labels": "from-github-pr"
+            }' \
+            "${GITLAB_URL}/api/v4/projects/${GITLAB_PROJECT_ID}/merge_requests"
+            
+      - name: 添加PR评论
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const prNumber = context.payload.pull_request.number;
+            
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: prNumber,
+              body: '该PR已同步到GitLab进行审核。一旦审核通过，PR将进入合并队列，在下次同步周期被合并。'
+            });

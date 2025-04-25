@@ -1,0 +1,209 @@
+name: GitLab-GitHub Sync
+
+on:
+  # 手动触发（作为备用选项）
+  workflow_dispatch:
+    inputs:
+      sync_direction:
+        description: '同步方向'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - gitlab-to-github
+          - github-to-gitlab
+          - merge-prs-only
+
+jobs:
+  sync-repo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_PAT }}
+      
+      - name: 配置Git
+        run: |
+          git config --global user.name "SiFli-bot"
+          git config --global user.email "sf-bot@sifli.com"
+          
+      - name: 设置GitLab访问
+        run: |
+          echo "设置GitLab访问凭证"
+          git remote add gitlab ${{ secrets.GITLAB_REPO_URL }}
+          
+      - name: 从GitLab拉取最新代码
+        if: ${{ github.event.inputs.sync_direction == 'full' || github.event.inputs.sync_direction == 'gitlab-to-github' || github.event.inputs.sync_direction == null }}
+        run: |
+          echo "从GitLab拉取最新代码..."
+          git fetch gitlab
+          git checkout -b temp-sync-branch
+          git merge gitlab/main --allow-unrelated-histories -X theirs
+          git push origin temp-sync-branch:main
+          echo "GitLab到GitHub同步完成"
+          
+      - name: 处理GitHub上的合并队列中的PR
+        if: ${{ github.event.inputs.sync_direction == 'full' || github.event.inputs.sync_direction == 'merge-prs-only' || github.event.inputs.sync_direction == null }}
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.SYNC_PAT }}
+          script: |
+            const { owner, repo } = context.repo;
+            
+            // 获取所有打开的PR
+            const prs = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: 'open'
+            });
+            
+            console.log(`Found ${prs.data.length} open PRs to process`);
+            
+            // 查找已经通过GitLab审核的PR
+            // 这些PR会有特定标签，表示已在GitLab上审核通过
+            const approvedPRs = [];
+            
+            for (const pr of prs.data) {
+              console.log(`Checking PR #${pr.number}: ${pr.title}`);
+              
+              // 获取PR详情，包括评论
+              const comments = await github.rest.issues.listComments({
+                owner,
+                repo,
+                issue_number: pr.number
+              });
+              
+              // 检查是否有GitLab批准的标记
+              // 这个标记应该是由GitLab CI在MR通过审核后自动添加的
+              const isApproved = comments.data.some(comment => 
+                comment.body.includes('GITLAB_REVIEW_APPROVED') && 
+                comment.user.login.includes('SiFli-bot'));
+              
+              if (isApproved) {
+                console.log(`PR #${pr.number} has been approved in GitLab, adding to merge queue`);
+                approvedPRs.push(pr);
+              } else {
+                console.log(`PR #${pr.number} has not been approved in GitLab yet, skipping`);
+              }
+            }
+            
+            console.log(`Found ${approvedPRs.length} approved PRs to merge`);
+            
+            // 处理每个已批准的PR
+            for (const pr of approvedPRs) {
+              console.log(`Processing approved PR #${pr.number}: ${pr.title}`);
+              
+              try {
+                // 检查PR是否可合并
+                const { data: prDetail } = await github.rest.pulls.get({
+                  owner,
+                  repo,
+                  pull_number: pr.number
+                });
+                
+                if (prDetail.mergeable) {
+                  console.log(`Merging PR #${pr.number}`);
+                  
+                  // 合并PR
+                  await github.rest.pulls.merge({
+                    owner,
+                    repo,
+                    pull_number: pr.number,
+                    merge_method: 'squash'
+                  });
+                  
+                  console.log(`Successfully merged PR #${pr.number}`);
+                  
+                  // 查找GitLab MR ID
+                  // 从PR分支名称中提取 - github-pr-{pr_number} 对应 GitLab分支
+                  const gitlabBranch = `github-pr-${pr.number}`;
+                  console.log(`Associated GitLab branch: ${gitlabBranch}`);
+                  
+                  // 记录GitLab分支名称，供后续关闭GitLab MR
+                  core.exportVariable(`GITLAB_BRANCH_${pr.number}`, gitlabBranch);
+                  
+                  // 在PR中添加评论，表示已合并
+                  await github.rest.issues.createComment({
+                    owner,
+                    repo,
+                    issue_number: pr.number,
+                    body: `✅ PR已成功合并！对应的GitLab分支 \`${gitlabBranch}\` 将被关闭。`
+                  });
+                } else {
+                  console.log(`PR #${pr.number} is not mergeable, skipping`);
+                  
+                  await github.rest.issues.createComment({
+                    owner,
+                    repo,
+                    issue_number: pr.number,
+                    body: `⚠️ 无法合并该PR，可能存在冲突。请解决冲突后重新推送。`
+                  });
+                }
+              } catch (error) {
+                console.error(`Error processing PR #${pr.number}: ${error.message}`);
+                
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: pr.number,
+                  body: `❌ 合并过程中出现错误: ${error.message}`
+                });
+              }
+            }
+            
+      - name: 关闭GitLab上对应的MR
+        if: ${{ github.event.inputs.sync_direction == 'full' || github.event.inputs.sync_direction == 'merge-prs-only' || github.event.inputs.sync_direction == null }}
+        env:
+          GITLAB_URL: ${{ secrets.GITLAB_API_URL }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_API_TOKEN }}
+          GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
+        run: |
+          echo "处理GitLab上对应的MR..."
+          
+          # 从环境变量中获取所有GitLab分支名称
+          env | grep "GITLAB_BRANCH_" | while read branch_env; do
+            BRANCH_NAME=${branch_env#*=}
+            PR_NUMBER=$(echo $branch_env | sed 's/GITLAB_BRANCH_//')
+            
+            echo "查找GitLab上与分支 $BRANCH_NAME 关联的MR..."
+            
+            # 使用GitLab API查找与该分支关联的MR
+            MR_ID=$(curl --silent --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+              "$GITLAB_URL/api/v4/projects/$GITLAB_PROJECT_ID/merge_requests?source_branch=$BRANCH_NAME&state=opened" | \
+              jq -r '.[0].iid')
+              
+            if [ "$MR_ID" != "null" ] && [ -n "$MR_ID" ]; then
+              echo "关闭GitLab MR #$MR_ID (分支: $BRANCH_NAME)"
+              
+              # 使用GitLab API关闭MR
+              curl --request PUT \
+                --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+                --header "Content-Type: application/json" \
+                --data '{"state_event": "close"}' \
+                "$GITLAB_URL/api/v4/projects/$GITLAB_PROJECT_ID/merge_requests/$MR_ID"
+                
+              echo "GitLab MR #$MR_ID 已关闭"
+              
+              # 删除GitLab上的分支
+              curl --request DELETE \
+                --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+                "$GITLAB_URL/api/v4/projects/$GITLAB_PROJECT_ID/repository/branches/$BRANCH_NAME"
+                
+              echo "GitLab 分支 $BRANCH_NAME 已删除"
+            else
+              echo "未找到与分支 $BRANCH_NAME 关联的开放MR"
+            fi
+          done
+          
+      - name: 将GitHub更新同步回GitLab
+        if: ${{ github.event.inputs.sync_direction == 'full' || github.event.inputs.sync_direction == 'github-to-gitlab' || github.event.inputs.sync_direction == null }}
+        run: |
+          echo "将GitHub更新同步回GitLab..."
+          git fetch origin
+          git checkout main
+          git pull origin main
+          git push gitlab main:main
+          echo "GitHub到GitLab同步完成"

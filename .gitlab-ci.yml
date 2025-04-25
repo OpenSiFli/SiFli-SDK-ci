@@ -2,6 +2,8 @@
 
 stages:
   - build
+  - approve
+  - sync
 
 # 定义构建作业
 build-sdk:
@@ -29,14 +31,264 @@ build-sdk:
     # 手动触发
     - if: '$CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api"'
       when: always
+    # 同步阶段不触发构建
+    - if: '$SYNC_PHASE == "true"'
+      when: never
 
-# 定时任务配置
+# GitHub PR批准作业 - 当关联到GitHub PR的MR被批准时运行
+approve-github-pr:
+  stage: approve
+  tags:
+    - sync
+  script: |
+    echo "处理GitHub PR批准流程..."
+    
+    # 检查当前MR是否与GitHub PR关联（通过分支名称判断 github-pr-XXX）
+    BRANCH_NAME=${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}
+    if [[ "$BRANCH_NAME" =~ ^github-pr-([0-9]+)$ ]]; then
+      # 提取GitHub PR编号
+      PR_NUMBER=${BASH_REMATCH[1]}
+      echo "检测到与GitHub PR #${PR_NUMBER} 关联的MR"
+      
+      # 检查MR是否已审核通过（通过MR的批准状态判断）
+      if [ "$CI_MERGE_REQUEST_APPROVED" == "true" ]; then
+        echo "MR已获得批准，标记GitHub PR为已批准状态"
+        
+        # 使用GitHub API向PR添加批准评论
+        curl -X POST \
+          -H "Accept: application/vnd.github.v3+json" \
+          -H "Authorization: token ${GITHUB_PAT}" \
+          "${GITHUB_API_URL}/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/issues/${PR_NUMBER}/comments" \
+          -d '{"body": "**GITLAB_REVIEW_APPROVED** - 该PR已在GitLab上通过审核，将在下一次同步周期中被合并。"}'
+          
+        echo "GitHub PR #${PR_NUMBER} 已标记为已批准状态"
+      else
+        echo "MR尚未获得批准，跳过GitHub PR批准流程"
+      fi
+    else
+      echo "当前MR不是来自GitHub PR，跳过GitHub PR批准流程"
+    fi
+  rules:
+    # 仅在MR被批准后运行
+    - if: '$CI_MERGE_REQUEST_APPROVED == "true" && $CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: always
+    - when: never
+
+# 准备同步阶段 - 合并所有待处理的MR
+prepare-sync:
+  stage: sync
+  tags:
+    - sync
+  script: |
+    echo "准备同步阶段 - 合并所有待处理的内部MR..."
+    
+    # 配置Git
+    git config --global user.name "SiFli-bot"
+    git config --global user.email "sf-bot@sifli.com"
+    
+    # 获取所有已审核通过的MR并合并（不包括来自GitHub PR的MR）
+    apk add --no-cache curl jq
+    
+    # 使用GitLab API获取已审核通过的内部MR列表（排除标签为"from-github-pr"的MR）
+    APPROVED_MRS=$(curl --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
+      "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests?state=opened&approved=true" | \
+      jq -r '.[] | select(.labels | contains(["from-github-pr"]) | not) | select(.merge_status == "can_be_merged") | .iid')
+    
+    # 合并这些MR
+    for MR_IID in $APPROVED_MRS; do
+      echo "合并内部MR #${MR_IID}..."
+      curl --request PUT \
+        --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
+        --header "Content-Type: application/json" \
+        --data '{"should_remove_source_branch": true, "merge_when_pipeline_succeeds": false, "sha": null}' \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${MR_IID}/merge"
+    done
+    
+    echo "所有已审核通过的内部MR已合并"
+  rules:
+    # 只在同步阶段运行
+    - if: '$SYNC_PHASE == "true"'
+      when: always
+    - when: never
+
+# 推送到GitHub
+push-to-github:
+  stage: sync
+  needs: ["prepare-sync"]
+  tags:
+    - sync
+  script: |
+    echo "将GitLab代码推送到GitHub..."
+    
+    # 配置Git
+    git config --global user.name "SiFli-bot"
+    git config --global user.email "sf-bot@sifli.com"
+    
+    # 添加GitHub远程仓库
+    git remote add github ${GITHUB_REPO_URL}
+    
+    # 获取最新代码并推送
+    git fetch origin
+    git checkout ${CI_DEFAULT_BRANCH}
+    git pull origin ${CI_DEFAULT_BRANCH}
+    
+    # 推送到GitHub
+    echo "正在推送到GitHub..."
+    git push github ${CI_DEFAULT_BRANCH}:${GITHUB_DEFAULT_BRANCH}
+    
+    echo "GitLab到GitHub同步完成"
+    
+    # 触发GitHub Actions工作流来处理合并队列中的PR
+    if [ -n "${GITHUB_PAT}" ]; then
+      echo "触发GitHub Actions同步工作流..."
+      curl -X POST \
+        -H "Accept: application/vnd.github.v3+json" \
+        -H "Authorization: token ${GITHUB_PAT}" \
+        "https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/actions/workflows/gitlab-github-sync.yml/dispatches" \
+        -d '{"ref":"'${GITHUB_DEFAULT_BRANCH}'", "inputs": {"sync_direction": "merge-prs-only"}}'
+    fi
+  rules:
+    # 只在同步阶段运行
+    - if: '$SYNC_PHASE == "true"'
+      when: always
+    - when: never
+
+# 同步GitHub的更改回GitLab
+sync-from-github:
+  stage: sync
+  needs: ["push-to-github"]
+  tags:
+    - sync
+  script: |
+    echo "同步GitHub的更改回GitLab..."
+    
+    # 配置Git
+    git config --global user.name "SiFli-bot"
+    git config --global user.email "sf-bot@sifli.com"
+    
+    # 添加GitHub远程仓库（如果尚未添加）
+    if ! git remote | grep -q github; then
+      git remote add github ${GITHUB_REPO_URL}
+    fi
+    
+    # 获取GitHub最新代码
+    git fetch github
+    
+    # 检查是否有更新
+    LOCAL_SHA=$(git rev-parse HEAD)
+    GITHUB_SHA=$(git rev-parse github/${GITHUB_DEFAULT_BRANCH})
+    
+    if [ "$LOCAL_SHA" != "$GITHUB_SHA" ]; then
+      echo "GitHub有新的更改，正在同步..."
+      
+      # 切换到临时分支
+      git checkout -b temp-sync-branch
+      
+      # 合并GitHub的更改
+      git merge github/${GITHUB_DEFAULT_BRANCH} --no-edit
+      
+      # 推送更改到GitLab
+      git checkout ${CI_DEFAULT_BRANCH}
+      git merge temp-sync-branch --no-edit
+      git push origin ${CI_DEFAULT_BRANCH}
+      
+      # 删除临时分支
+      git branch -D temp-sync-branch
+      
+      echo "GitHub到GitLab同步完成"
+    else
+      echo "GitHub和GitLab已同步，无需更新"
+    fi
+  rules:
+    # 只在同步阶段运行
+    - if: '$SYNC_PHASE == "true" && $SKIP_GITHUB_SYNC != "true"'
+      when: always
+    - when: never
+
+# 同步到Gerrit
+sync-to-gerrit:
+  stage: sync
+  needs: ["sync-from-github"]
+  tags:
+    - sync
+  script: |
+    echo "同步代码到Gerrit..."
+    
+    # 配置Git
+    git config --global user.name "SiFli-bot"
+    git config --global user.email "sf-bot@sifli.com"
+    
+    # 添加Gerrit远程仓库
+    if [ -n "${GERRIT_HOST}" ] && [ -n "${GERRIT_USER}" ]; then
+      git remote add gerrit ssh://${GERRIT_USER}@${GERRIT_HOST}:29418/${GERRIT_PROJECT}
+      
+      # 获取最新代码
+      git fetch origin
+      git checkout ${CI_DEFAULT_BRANCH}
+      git pull origin ${CI_DEFAULT_BRANCH}
+      
+      # 推送到Gerrit
+      echo "正在推送到Gerrit..."
+      git push gerrit ${CI_DEFAULT_BRANCH}:refs/heads/${CI_DEFAULT_BRANCH}
+      
+      echo "Gerrit同步完成"
+    else
+      echo "未配置Gerrit凭证，跳过Gerrit同步"
+    fi
+  rules:
+    # 只在同步阶段运行
+    - if: '$SYNC_PHASE == "true" && $SKIP_GERRIT_SYNC != "true"'
+      when: always
+    - when: never
+
+# 手动触发同步任务
+sync:
+  stage: sync
+  when: manual
+  tags:
+    - sync
+  script: |
+    echo "启动GitLab到GitHub同步流程..."
+    echo "同步将在整个流程中完成以下步骤："
+    echo "1. 合并所有已审核通过的内部MR"
+    echo "2. 推送代码到GitHub"
+    echo "3. 触发GitHub处理合并队列中的PR"
+    echo "4. 将GitHub更新同步回GitLab"
+  variables:
+    SYNC_PHASE: "true"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api"'
+      when: manual
+    - when: never
+
+# 定时同步任务
+scheduled-sync:
+  stage: sync
+  script: |
+    echo "启动定时同步流程..."
+    echo "同步将在整个流程中完成以下步骤："
+    echo "1. 合并所有已审核通过的内部MR"
+    echo "2. 推送代码到GitHub"
+    echo "3. 触发GitHub处理合并队列中的PR"
+    echo "4. 将GitHub更新同步回GitLab"
+  variables:
+    SYNC_PHASE: "true"
+  rules:
+    # 定时触发 - 每两天运行一次
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $SCHEDULED_SYNC == "true"'
+      when: always
+    - when: never
+
+# 工作流规则
 workflow:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
     - if: '$CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api"'
       when: always
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: always
     - when: never
 
 # 定时任务配置，在Repository > Schedules中添加以下cron表达式:
-# 0 3 * * *  (每天凌晨3点运行)
+# 0 3 * * *  (每天凌晨3点运行构建)
+# 0 0 */2 * *  (每两天运行同步，设置变量SCHEDULED_SYNC=true)
