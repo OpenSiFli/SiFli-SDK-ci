@@ -32,7 +32,7 @@ runs:
         
         # Encode the repository path for use in the API URL
         # This is compatible with GitLab 16+ versions
-        ENCODED_PATH=$(echo ${GITLAB_REPO_PATH} | sed 's|/|%2F|g')
+        ENCODED_PATH=$(echo ${GITLAB_REPO_PATH}')
         
         # Try to get project ID using the encoded path
         # This method uses the project path directly and works on most GitLab versions
