@@ -15,15 +15,20 @@ on:
           - github-to-gitlab
           - merge-prs-only
 
+# 使用权限替代 SYNC_PAT
+permissions:
+  contents: write    # 允许推送代码
+  pull-requests: write  # 允许合并PR和添加评论
+  issues: write    # 允许在issues上添加评论
+
 jobs:
   sync-repo:
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.SYNC_PAT }}
       
       - name: 配置Git
         run: |
@@ -47,9 +52,8 @@ jobs:
           
       - name: 处理GitHub上的合并队列中的PR
         if: ${{ github.event.inputs.sync_direction == 'full' || github.event.inputs.sync_direction == 'merge-prs-only' || github.event.inputs.sync_direction == null }}
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.SYNC_PAT }}
           script: |
             const { owner, repo } = context.repo;
             

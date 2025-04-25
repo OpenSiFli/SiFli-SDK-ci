@@ -8,21 +8,27 @@ on:
       - master
       - develop
 
+# 定义权限，替代使用 GITHUB_TOKEN
+permissions:
+  contents: read     # 需要读取仓库内容
+  pull-requests: write  # 需要在PR上添加评论
+
 jobs:
   sync-to-gitlab:
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.ref }}
+          # 移除 token 参数，使用默认的 GITHUB_TOKEN
           
       - name: 获取PR详情
         id: pr
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # 无需提供 github-token 参数，将使用默认的 GITHUB_TOKEN
           script: |
             const { owner, repo } = context.repo;
             const prNumber = context.payload.pull_request.number;
@@ -85,9 +91,9 @@ jobs:
             "${GITLAB_URL}/api/v4/projects/${GITLAB_PROJECT_ID}/merge_requests"
             
       - name: 添加PR评论
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          # 无需提供 github-token 参数
           script: |
             const { owner, repo } = context.repo;
             const prNumber = context.payload.pull_request.number;
