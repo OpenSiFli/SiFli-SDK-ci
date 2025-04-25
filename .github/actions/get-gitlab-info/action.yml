@@ -28,26 +28,30 @@ runs:
         # Construct GitLab API URL and repository URL
         GITLAB_API_URL="https://${GITLAB_URL}/api/v4"
         
-        echo "Attempting to retrieve GitLab Project ID for repository: ${GITLAB_REPO_PATH}"
+        # Try to get project ID directly using the provided path
+        # Assuming GITLAB_REPO_PATH is already in the correct format for the API
+        RESPONSE=$(curl -s -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" "${GITLAB_API_URL}/projects/${GITLAB_REPO_PATH}")
         
-        # Encode the repository path for use in the API URL
-        # This is compatible with GitLab 16+ versions
-        ENCODED_PATH=$(echo ${GITLAB_REPO_PATH}')
-        
-        # Try to get project ID using the encoded path
-        # This method uses the project path directly and works on most GitLab versions
-        PROJECT_ID=$(curl -s -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
-          "${GITLAB_API_URL}/projects/${ENCODED_PATH}" | \
-          jq -r '.id')
+        # Check if response is valid JSON and has an id field
+        if echo "$RESPONSE" | jq -e '.id' > /dev/null 2>&1; then
+          PROJECT_ID=$(echo "$RESPONSE" | jq -r '.id')
+        else
+          PROJECT_ID=""
+        fi
         
         # If the first approach fails, try using the search API
         if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" == "null" ]; then
           echo "First method failed, trying alternative approach with search API..."
           
           # Search for the project by name with exact path
-          PROJECT_ID=$(curl -s -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
-            "${GITLAB_API_URL}/projects?search=${GITLAB_REPO_PATH}&simple=true" | \
-            jq -r '[.[] | select(.path_with_namespace == "'${GITLAB_REPO_PATH}'")] | .[0].id')
+          SEARCH_RESPONSE=$(curl -s -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" "${GITLAB_API_URL}/projects?search=${GITLAB_REPO_PATH}&simple=true")
+          
+          # Check if response is valid JSON before processing
+          if echo "$SEARCH_RESPONSE" | jq -e 'length > 0' > /dev/null 2>&1; then
+            PROJECT_ID=$(echo "$SEARCH_RESPONSE" | jq -r '[.[] | select(.path_with_namespace == "'${GITLAB_REPO_PATH}'")] | .[0].id // ""')
+          else
+            PROJECT_ID=""
+          fi
         fi
         
         # If both approaches fail, exit with an error
