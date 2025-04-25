@@ -5,8 +5,6 @@ on:
     types: [opened, synchronize, reopened]
     branches:
       - main
-      - master
-      - develop
 
 # 定义权限，替代使用 GITHUB_TOKEN
 permissions:
@@ -46,33 +44,14 @@ jobs:
             core.setOutput("body", prBody);
             core.setOutput("target_branch", targetBranch);
             core.setOutput("pr_number", prNumber);
-            
+      
       - name: 获取GitLab项目ID
-        id: gitlab_info
-        env:
-          GITLAB_URL: ${{ secrets.GITLAB_URL }}
-          GITLAB_REPO_PATH: ${{ secrets.GITLAB_REPO_PATH }}
-          GITLAB_TOKEN: ${{ secrets.GITLAB_API_TOKEN }}
-        run: |
-          # 构建GitLab API URL和仓库URL
-          GITLAB_API_URL="${GITLAB_URL}/api/v4"
-          GITLAB_REPO_URL="https://oauth2:${GITLAB_TOKEN}@${GITLAB_URL}/${GITLAB_REPO_PATH}.git"
-          
-          echo "API_URL=${GITLAB_API_URL}" >> $GITHUB_OUTPUT
-          echo "REPO_URL=${GITLAB_REPO_URL}" >> $GITHUB_OUTPUT
-          
-          # 使用GitLab API获取项目ID
-          GITLAB_PROJECT_ID=$(curl -s -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
-            "${GITLAB_API_URL}/projects/$(echo ${GITLAB_REPO_PATH} | sed 's|/|%2F|g')" | \
-            jq -r '.id')
-          
-          if [ -z "$GITLAB_PROJECT_ID" ] || [ "$GITLAB_PROJECT_ID" == "null" ]; then
-            echo "错误: 无法获取GitLab项目ID，请检查GITLAB_REPO_PATH和GITLAB_TOKEN"
-            exit 1
-          else
-            echo "获取到GitLab项目ID: ${GITLAB_PROJECT_ID}"
-            echo "PROJECT_ID=${GITLAB_PROJECT_ID}" >> $GITHUB_OUTPUT
-          fi
+        id: gitlab-info
+        uses: ./.github/actions/get-gitlab-info
+        with:
+          gitlab_url: ${{ secrets.GITLAB_URL }}
+          gitlab_repo_path: ${{ secrets.GITLAB_REPO_PATH }}
+          gitlab_token: ${{ secrets.GITLAB_API_TOKEN }}
             
       - name: 推送至GitLab
         env:
@@ -83,9 +62,7 @@ jobs:
           GITLAB_URL: ${{ secrets.GITLAB_URL }}
           GITLAB_REPO_PATH: ${{ secrets.GITLAB_REPO_PATH }}
           GITLAB_TOKEN: ${{ secrets.GITLAB_API_TOKEN }}
-          GITLAB_API_URL: ${{ steps.gitlab_info.outputs.API_URL }}
-          GITLAB_REPO_URL: ${{ steps.gitlab_info.outputs.REPO_URL }}
-          GITLAB_PROJECT_ID: ${{ steps.gitlab_info.outputs.PROJECT_ID }}
+          GITLAB_PROJECT_ID: ${{ steps.gitlab-info.outputs.project_id }}
         run: |
           # 设置Git配置
           git config --global user.name "SiFli-bot"
@@ -93,6 +70,10 @@ jobs:
           
           # 创建GitLab分支名称
           GITLAB_BRANCH="github-pr-${PR_NUMBER}"
+          
+          # 构建GitLab API URL和仓库URL
+          GITLAB_API_URL="${GITLAB_URL}/api/v4"
+          GITLAB_REPO_URL="https://oauth2:${GITLAB_TOKEN}@${GITLAB_URL}/${GITLAB_REPO_PATH}.git"
           
           # 添加GitLab远程仓库
           git remote add gitlab ${GITLAB_REPO_URL}
