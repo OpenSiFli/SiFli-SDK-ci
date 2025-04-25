@@ -26,7 +26,7 @@ runs:
         GITLAB_TOKEN: ${{ inputs.gitlab_token }}
       run: |
         # Construct GitLab API URL and repository URL
-        GITLAB_API_URL="${GITLAB_URL}/api/v4"
+        GITLAB_API_URL="https://${GITLAB_URL}/api/v4"
         
         echo "Attempting to retrieve GitLab Project ID for repository: ${GITLAB_REPO_PATH}"
         
