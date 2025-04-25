@@ -161,7 +161,7 @@ jobs:
       - name: 关闭GitLab上对应的MR
         if: ${{ github.event.inputs.sync_direction == 'full' || github.event.inputs.sync_direction == 'merge-prs-only' || github.event.inputs.sync_direction == null }}
         env:
-          GITLAB_URL: ${{ secrets.GITLAB_API_URL }}
+          GITLAB_URL: ${{ secrets.GITLAB_URL }}
           GITLAB_TOKEN: ${{ secrets.GITLAB_API_TOKEN }}
           GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
         run: |

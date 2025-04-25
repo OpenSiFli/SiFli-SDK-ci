@@ -22,7 +22,6 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.ref }}
-          # 移除 token 参数，使用默认的 GITHUB_TOKEN
           
       - name: 获取PR详情
         id: pr
