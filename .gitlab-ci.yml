@@ -55,9 +55,14 @@ approve-github-pr:
         echo "MR已获得批准，标记GitHub PR为已批准状态"
         
         # 使用GitHub API向PR添加批准评论
+        # 构建GitHub API URL和请求
+        GITHUB_API_URL="https://api.github.com"
+        GITHUB_REPO_OWNER=$(echo "${GITHUB_REPO}" | cut -d'/' -f1)
+        GITHUB_REPO_NAME=$(echo "${GITHUB_REPO}" | cut -d'/' -f2)
+        
         curl -X POST \
           -H "Accept: application/vnd.github.v3+json" \
-          -H "Authorization: token ${GITHUB_PAT}" \
+          -H "Authorization: token ${GITHUB_TOKEN}" \
           "${GITHUB_API_URL}/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/issues/${PR_NUMBER}/comments" \
           -d '{"body": "**GITLAB_REVIEW_APPROVED** - 该PR已在GitLab上通过审核，将在下一次同步周期中被合并。"}'
           
@@ -124,6 +129,13 @@ push-to-github:
     git config --global user.name "SiFli-bot"
     git config --global user.email "sf-bot@sifli.com"
     
+    # 自动构建GitHub相关URL和仓库地址
+    GITHUB_API_URL="https://api.github.com"
+    GITHUB_REPO_OWNER=$(echo "${GITHUB_REPO}" | cut -d'/' -f1)
+    GITHUB_REPO_NAME=$(echo "${GITHUB_REPO}" | cut -d'/' -f2)
+    GITHUB_REPO_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}.git"
+    GITHUB_DEFAULT_BRANCH=${GITHUB_DEFAULT_BRANCH:-main}
+    
     # 添加GitHub远程仓库
     git remote add github ${GITHUB_REPO_URL}
     
@@ -139,11 +151,11 @@ push-to-github:
     echo "GitLab到GitHub同步完成"
     
     # 触发GitHub Actions工作流来处理合并队列中的PR
-    if [ -n "${GITHUB_PAT}" ]; then
+    if [ -n "${GITHUB_TOKEN}" ]; then
       echo "触发GitHub Actions同步工作流..."
       curl -X POST \
         -H "Accept: application/vnd.github.v3+json" \
-        -H "Authorization: token ${GITHUB_PAT}" \
+        -H "Authorization: token ${GITHUB_TOKEN}" \
         "https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/actions/workflows/gitlab-github-sync.yml/dispatches" \
         -d '{"ref":"'${GITHUB_DEFAULT_BRANCH}'", "inputs": {"sync_direction": "merge-prs-only"}}'
     fi
@@ -165,6 +177,12 @@ sync-from-github:
     # 配置Git
     git config --global user.name "SiFli-bot"
     git config --global user.email "sf-bot@sifli.com"
+    
+    # 自动构建GitHub仓库URL
+    GITHUB_REPO_OWNER=$(echo "${GITHUB_REPO}" | cut -d'/' -f1)
+    GITHUB_REPO_NAME=$(echo "${GITHUB_REPO}" | cut -d'/' -f2)
+    GITHUB_REPO_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}.git"
+    GITHUB_DEFAULT_BRANCH=${GITHUB_DEFAULT_BRANCH:-main}
     
     # 添加GitHub远程仓库（如果尚未添加）
     if ! git remote | grep -q github; then
