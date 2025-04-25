@@ -27,7 +27,6 @@ jobs:
         id: pr
         uses: actions/github-script@v7
         with:
-          # 无需提供 github-token 参数，将使用默认的 GITHUB_TOKEN
           script: |
             const { owner, repo } = context.repo;
             const prNumber = context.payload.pull_request.number;
@@ -48,6 +47,33 @@ jobs:
             core.setOutput("target_branch", targetBranch);
             core.setOutput("pr_number", prNumber);
             
+      - name: 获取GitLab项目ID
+        id: gitlab_info
+        env:
+          GITLAB_URL: ${{ secrets.GITLAB_URL }}
+          GITLAB_REPO_PATH: ${{ secrets.GITLAB_REPO_PATH }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_API_TOKEN }}
+        run: |
+          # 构建GitLab API URL和仓库URL
+          GITLAB_API_URL="${GITLAB_URL}/api/v4"
+          GITLAB_REPO_URL="https://oauth2:${GITLAB_TOKEN}@${GITLAB_URL}/${GITLAB_REPO_PATH}.git"
+          
+          echo "API_URL=${GITLAB_API_URL}" >> $GITHUB_OUTPUT
+          echo "REPO_URL=${GITLAB_REPO_URL}" >> $GITHUB_OUTPUT
+          
+          # 使用GitLab API获取项目ID
+          GITLAB_PROJECT_ID=$(curl -s -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+            "${GITLAB_API_URL}/projects/$(echo ${GITLAB_REPO_PATH} | sed 's|/|%2F|g')" | \
+            jq -r '.id')
+          
+          if [ -z "$GITLAB_PROJECT_ID" ] || [ "$GITLAB_PROJECT_ID" == "null" ]; then
+            echo "错误: 无法获取GitLab项目ID，请检查GITLAB_REPO_PATH和GITLAB_TOKEN"
+            exit 1
+          else
+            echo "获取到GitLab项目ID: ${GITLAB_PROJECT_ID}"
+            echo "PROJECT_ID=${GITLAB_PROJECT_ID}" >> $GITHUB_OUTPUT
+          fi
+            
       - name: 推送至GitLab
         env:
           PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
@@ -55,9 +81,11 @@ jobs:
           PR_BODY: ${{ steps.pr.outputs.body }}
           TARGET_BRANCH: ${{ steps.pr.outputs.target_branch }}
           GITLAB_URL: ${{ secrets.GITLAB_URL }}
-          GITLAB_REPO: ${{ secrets.GITLAB_REPO_PATH }}
+          GITLAB_REPO_PATH: ${{ secrets.GITLAB_REPO_PATH }}
           GITLAB_TOKEN: ${{ secrets.GITLAB_API_TOKEN }}
-          GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
+          GITLAB_API_URL: ${{ steps.gitlab_info.outputs.API_URL }}
+          GITLAB_REPO_URL: ${{ steps.gitlab_info.outputs.REPO_URL }}
+          GITLAB_PROJECT_ID: ${{ steps.gitlab_info.outputs.PROJECT_ID }}
         run: |
           # 设置Git配置
           git config --global user.name "SiFli-bot"
@@ -66,8 +94,8 @@ jobs:
           # 创建GitLab分支名称
           GITLAB_BRANCH="github-pr-${PR_NUMBER}"
           
-          # 添加GitLab远程仓库（使用token作为用户名）
-          git remote add gitlab https://oauth2:${GITLAB_TOKEN}@${GITLAB_URL}/${GITLAB_REPO}.git
+          # 添加GitLab远程仓库
+          git remote add gitlab ${GITLAB_REPO_URL}
           
           # 强制推送当前分支到GitLab，使用特定分支名称
           git push -f gitlab HEAD:${GITLAB_BRANCH}
@@ -87,12 +115,11 @@ jobs:
               "description": "'${MR_DESCRIPTION}'",
               "labels": "from-github-pr"
             }' \
-            "${GITLAB_URL}/api/v4/projects/${GITLAB_PROJECT_ID}/merge_requests"
+            "${GITLAB_API_URL}/projects/${GITLAB_PROJECT_ID}/merge_requests"
             
       - name: 添加PR评论
         uses: actions/github-script@v7
         with:
-          # 无需提供 github-token 参数
           script: |
             const { owner, repo } = context.repo;
             const prNumber = context.payload.pull_request.number;

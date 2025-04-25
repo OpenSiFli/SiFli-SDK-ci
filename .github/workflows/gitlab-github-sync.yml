@@ -30,6 +30,33 @@ jobs:
         with:
           fetch-depth: 0
       
+      - name: 获取GitLab信息
+        id: gitlab_info
+        env:
+          GITLAB_URL: ${{ secrets.GITLAB_URL }}
+          GITLAB_REPO_PATH: ${{ secrets.GITLAB_REPO_PATH }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_API_TOKEN }}
+        run: |
+          # 构建GitLab API URL和仓库URL
+          GITLAB_API_URL="${GITLAB_URL}/api/v4"
+          GITLAB_REPO_URL="https://oauth2:${GITLAB_TOKEN}@${GITLAB_URL}/${GITLAB_REPO_PATH}.git"
+          
+          echo "API_URL=${GITLAB_API_URL}" >> $GITHUB_OUTPUT
+          echo "REPO_URL=${GITLAB_REPO_URL}" >> $GITHUB_OUTPUT
+          
+          # 使用GitLab API获取项目ID
+          GITLAB_PROJECT_ID=$(curl -s -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+            "${GITLAB_API_URL}/projects/$(echo ${GITLAB_REPO_PATH} | sed 's|/|%2F|g')" | \
+            jq -r '.id')
+          
+          if [ -z "$GITLAB_PROJECT_ID" ] || [ "$GITLAB_PROJECT_ID" == "null" ]; then
+            echo "错误: 无法获取GitLab项目ID，请检查GITLAB_REPO_PATH和GITLAB_TOKEN"
+            exit 1
+          else
+            echo "获取到GitLab项目ID: ${GITLAB_PROJECT_ID}"
+            echo "PROJECT_ID=${GITLAB_PROJECT_ID}" >> $GITHUB_OUTPUT
+          fi
+      
       - name: 配置Git
         run: |
           git config --global user.name "SiFli-bot"
@@ -38,7 +65,7 @@ jobs:
       - name: 设置GitLab访问
         run: |
           echo "设置GitLab访问凭证"
-          git remote add gitlab ${{ secrets.GITLAB_REPO_URL }}
+          git remote add gitlab ${{ steps.gitlab_info.outputs.REPO_URL }}
           
       - name: 从GitLab拉取最新代码
         if: ${{ github.event.inputs.sync_direction == 'full' || github.event.inputs.sync_direction == 'gitlab-to-github' || github.event.inputs.sync_direction == null }}
@@ -161,9 +188,9 @@ jobs:
       - name: 关闭GitLab上对应的MR
         if: ${{ github.event.inputs.sync_direction == 'full' || github.event.inputs.sync_direction == 'merge-prs-only' || github.event.inputs.sync_direction == null }}
         env:
-          GITLAB_URL: ${{ secrets.GITLAB_URL }}
+          GITLAB_API_URL: ${{ steps.gitlab_info.outputs.API_URL }}
           GITLAB_TOKEN: ${{ secrets.GITLAB_API_TOKEN }}
-          GITLAB_PROJECT_ID: ${{ secrets.GITLAB_PROJECT_ID }}
+          GITLAB_PROJECT_ID: ${{ steps.gitlab_info.outputs.PROJECT_ID }}
         run: |
           echo "处理GitLab上对应的MR..."
           
@@ -176,7 +203,7 @@ jobs:
             
             # 使用GitLab API查找与该分支关联的MR
             MR_ID=$(curl --silent --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-              "$GITLAB_URL/api/v4/projects/$GITLAB_PROJECT_ID/merge_requests?source_branch=$BRANCH_NAME&state=opened" | \
+              "$GITLAB_API_URL/projects/$GITLAB_PROJECT_ID/merge_requests?source_branch=$BRANCH_NAME&state=opened" | \
               jq -r '.[0].iid')
               
             if [ "$MR_ID" != "null" ] && [ -n "$MR_ID" ]; then
@@ -187,14 +214,14 @@ jobs:
                 --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
                 --header "Content-Type: application/json" \
                 --data '{"state_event": "close"}' \
-                "$GITLAB_URL/api/v4/projects/$GITLAB_PROJECT_ID/merge_requests/$MR_ID"
+                "$GITLAB_API_URL/projects/$GITLAB_PROJECT_ID/merge_requests/$MR_ID"
                 
               echo "GitLab MR #$MR_ID 已关闭"
               
               # 删除GitLab上的分支
               curl --request DELETE \
                 --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-                "$GITLAB_URL/api/v4/projects/$GITLAB_PROJECT_ID/repository/branches/$BRANCH_NAME"
+                "$GITLAB_API_URL/projects/$GITLAB_PROJECT_ID/repository/branches/$BRANCH_NAME"
                 
               echo "GitLab 分支 $BRANCH_NAME 已删除"
             else
