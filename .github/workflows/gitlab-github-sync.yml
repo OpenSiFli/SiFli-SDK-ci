@@ -30,32 +30,13 @@ jobs:
         with:
           fetch-depth: 0
       
-      - name: 获取GitLab信息
-        id: gitlab_info
-        env:
-          GITLAB_URL: ${{ secrets.GITLAB_URL }}
-          GITLAB_REPO_PATH: ${{ secrets.GITLAB_REPO_PATH }}
-          GITLAB_TOKEN: ${{ secrets.GITLAB_API_TOKEN }}
-        run: |
-          # 构建GitLab API URL和仓库URL
-          GITLAB_API_URL="${GITLAB_URL}/api/v4"
-          GITLAB_REPO_URL="https://oauth2:${GITLAB_TOKEN}@${GITLAB_URL}/${GITLAB_REPO_PATH}.git"
-          
-          echo "API_URL=${GITLAB_API_URL}" >> $GITHUB_OUTPUT
-          echo "REPO_URL=${GITLAB_REPO_URL}" >> $GITHUB_OUTPUT
-          
-          # 使用GitLab API获取项目ID
-          GITLAB_PROJECT_ID=$(curl -s -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
-            "${GITLAB_API_URL}/projects/$(echo ${GITLAB_REPO_PATH} | sed 's|/|%2F|g')" | \
-            jq -r '.id')
-          
-          if [ -z "$GITLAB_PROJECT_ID" ] || [ "$GITLAB_PROJECT_ID" == "null" ]; then
-            echo "错误: 无法获取GitLab项目ID，请检查GITLAB_REPO_PATH和GITLAB_TOKEN"
-            exit 1
-          else
-            echo "获取到GitLab项目ID: ${GITLAB_PROJECT_ID}"
-            echo "PROJECT_ID=${GITLAB_PROJECT_ID}" >> $GITHUB_OUTPUT
-          fi
+      - name: 获取GitLab项目ID
+        id: gitlab-info
+        uses: ./.github/actions/get-gitlab-info
+        with:
+          gitlab_url: ${{ secrets.GITLAB_URL }}
+          gitlab_repo_path: ${{ secrets.GITLAB_REPO_PATH }}
+          gitlab_token: ${{ secrets.GITLAB_API_TOKEN }}
       
       - name: 配置Git
         run: |
@@ -63,9 +44,14 @@ jobs:
           git config --global user.email "sf-bot@sifli.com"
           
       - name: 设置GitLab访问
+        env:
+          GITLAB_URL: ${{ secrets.GITLAB_URL }}
+          GITLAB_REPO_PATH: ${{ secrets.GITLAB_REPO_PATH }}
+          GITLAB_TOKEN: ${{ secrets.GITLAB_API_TOKEN }}
         run: |
           echo "设置GitLab访问凭证"
-          git remote add gitlab ${{ steps.gitlab_info.outputs.REPO_URL }}
+          GITLAB_REPO_URL="https://oauth2:${GITLAB_TOKEN}@${GITLAB_URL}/${GITLAB_REPO_PATH}.git"
+          git remote add gitlab ${GITLAB_REPO_URL}
           
       - name: 从GitLab拉取最新代码
         if: ${{ github.event.inputs.sync_direction == 'full' || github.event.inputs.sync_direction == 'gitlab-to-github' || github.event.inputs.sync_direction == null }}
@@ -188,11 +174,14 @@ jobs:
       - name: 关闭GitLab上对应的MR
         if: ${{ github.event.inputs.sync_direction == 'full' || github.event.inputs.sync_direction == 'merge-prs-only' || github.event.inputs.sync_direction == null }}
         env:
-          GITLAB_API_URL: ${{ steps.gitlab_info.outputs.API_URL }}
+          GITLAB_URL: ${{ secrets.GITLAB_URL }}
           GITLAB_TOKEN: ${{ secrets.GITLAB_API_TOKEN }}
-          GITLAB_PROJECT_ID: ${{ steps.gitlab_info.outputs.PROJECT_ID }}
+          GITLAB_PROJECT_ID: ${{ steps.gitlab-info.outputs.project_id }}
         run: |
           echo "处理GitLab上对应的MR..."
+          
+          # 构建GitLab API URL
+          GITLAB_API_URL="${GITLAB_URL}/api/v4"
           
           # 从环境变量中获取所有GitLab分支名称
           env | grep "GITLAB_BRANCH_" | while read branch_env; do
