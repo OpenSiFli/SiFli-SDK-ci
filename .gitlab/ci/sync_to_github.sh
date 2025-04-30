@@ -25,6 +25,7 @@ git config --global user.name "ci-bot"
 
 git remote add github-auth "https://${GITHUB_TOKEN}@${GITHUB_REPO#https://}"
 git fetch origin "$BRANCH"
+git checkout -B "$BRANCH" "origin/$BRANCH"
 git push github-auth "$BRANCH:$BRANCH" --force
 
 echo "[INFO] 推送完成"
