@@ -1,0 +1,5 @@
+sync_to_github:
+  stage: sync_to_github
+  script:
+    - echo "[sync_to_github] 推送GitLab主分支到GitHub的脚本调用占位"
+    - bash .gitlab/ci/sync_to_github.sh
