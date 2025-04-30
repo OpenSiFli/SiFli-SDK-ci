@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # .gitlab/ci/find_github_pr_mrs.py
-# 查找所有未合并且标题带有 (GitHub PR) 的MR，并触发GitHub Action批量合并
+# 查找所有可合并且标题带有 (GitHub PR) 的MR，并触发GitHub Action批量合并
 
 import os
 import sys
@@ -30,7 +30,8 @@ pr_numbers = []
 mr_map = {}  # pr_number -> mr_id
 for mr in resp.json():
     title = mr['title']
-    if title.endswith('(GitHub PR)'):
+    merge_status = mr.get('merge_status')
+    if title.endswith('(GitHub PR)') and merge_status == 'can_be_merged':
         # 假设PR号在source_branch如 pr-123
         source_branch = mr['source_branch']
         if source_branch.startswith('pr-'):
@@ -39,10 +40,10 @@ for mr in resp.json():
             mr_map[pr_number] = mr['iid']
 
 if not pr_numbers:
-    print('[INFO] 没有需要同步的GitHub PR MR')
+    print('[INFO] 没有可合并的GitHub PR MR')
     sys.exit(0)
 
-print(f'[INFO] 待合并PR编号: {pr_numbers}')
+print(f'[INFO] 可合并PR编号: {pr_numbers}')
 
 # 触发GitHub Action
 headers_gh = {

@@ -6,4 +6,5 @@ merge_github_pr:
     - pip3 install requests -i https://mirrors.ustc.edu.cn/pypi/simple
   script:
     - echo "[merge_github_pr] 触发GitHub Action合并PR的脚本调用占位"
+    - python3 .gitlab/ci/find_github_pr_mrs.py
     - python3 .gitlab/ci/trigger_github_action.py
