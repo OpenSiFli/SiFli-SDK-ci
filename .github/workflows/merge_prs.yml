@@ -1,0 +1,218 @@
+# .github/workflows/merge_prs.yml
+
+name: Merge Approved PRs & Trigger GitLab Sync
+
+# Triggered by the GitLab CI job via repository_dispatch
+on:
+  repository_dispatch:
+    types: [start_pr_merge_sync]
+
+jobs:
+  process_and_merge:
+    runs-on: ubuntu-latest
+    env:
+      # Secrets needed for GitLab API access
+      GITLAB_API_TOKEN: ${{ secrets.GITLAB_API_TOKEN }}
+      GITLAB_PROJECT_PATH: ${{ secrets.GITLAB_PROJECT_PATH }} # e.g., your_group/your_project
+      GITLAB_API_URL: ${{ secrets.GITLAB_API_URL }}
+      GITLAB_PIPELINE_TRIGGER_TOKEN: ${{ secrets.GITLAB_PIPELINE_TRIGGER_TOKEN }}
+      # GitHub Token (using default is usually fine, but PAT might be needed for specific permissions)
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Define the target branch, should match GitLab CI variable
+      TARGET_BRANCH: main
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ env.GITHUB_TOKEN }}
+
+      - name: Install GitHub CLI and jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gh jq curl
+
+      - name: Identify mergeable PRs
+        id: filter_prs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { GITLAB_API_TOKEN, GITLAB_PROJECT_PATH, GITLAB_API_URL, TARGET_BRANCH } = process.env;
+            const eligiblePrs = [];
+
+            if (!GITLAB_API_TOKEN || !GITLAB_PROJECT_PATH || !GITLAB_API_URL) {
+              core.setFailed('Required GitLab secrets (GITLAB_API_TOKEN, GITLAB_PROJECT_PATH, GITLAB_API_URL) are not set.');
+              return;
+            }
+
+            console.log(`=== Identifying Mergeable PRs targeting ${TARGET_BRANCH} ===`);
+
+            // Get open PRs using octokit
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              base: TARGET_BRANCH,
+            });
+
+            console.log(`Found ${prs.length} open PRs targeting ${TARGET_BRANCH}.`);
+
+            for (const pr of prs) {
+              console.log(`Checking PR #${pr.number} (${pr.html_url})...`);
+
+              // 1. Check GitHub mergeable state
+              // Need a separate API call to get detailed PR info including mergeable state
+              const { data: detailedPr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+              });
+
+              // mergeable_state can be 'clean', 'dirty', 'unknown', 'unstable', 'blocked', 'behind', 'draft'
+              // 'clean' means mergeable without conflicts
+              if (detailedPr.mergeable_state !== 'clean') {
+                console.log(`  - GitHub status is not mergeable ('${detailedPr.mergeable_state}'). Skipping.`);
+                continue;
+              }
+               // Also check if it's a draft PR
+              if (detailedPr.draft) {
+                console.log(`  - PR is a draft. Skipping.`);
+                continue;
+              }
+              console.log(`  - GitHub status is mergeable ('${detailedPr.mergeable_state}').`);
+
+
+              // 2. Find corresponding GitLab MR by title and check its pipeline status
+              const expectedMrTitle = `${pr.title} (GitHub PR)`;
+              console.log(`  - Searching for GitLab MR with title: "${expectedMrTitle}"`);
+
+              // URL-encode the project path for API calls
+              const encodedProjectPath = encodeURIComponent(GITLAB_PROJECT_PATH);
+
+              const gitlabMrSearchUrl = `${GITLAB_API_URL}/projects/${encodedProjectPath}/merge_requests?state=opened&search=${encodeURIComponent(expectedMrTitle)}&in=title`;
+              let mrData;
+              try {
+                const mrResponse = await fetch(gitlabMrSearchUrl, { headers: { 'PRIVATE-TOKEN': GITLAB_API_TOKEN } });
+                if (!mrResponse.ok) throw new Error(`GitLab MR search failed: ${mrResponse.statusText}`);
+                mrData = await mrResponse.json();
+
+                // Filter for exact title match as GitLab search can be broad
+                const exactMatchMrs = mrData.filter(mr => mr.title === expectedMrTitle);
+
+                if (exactMatchMrs.length !== 1) {
+                  console.log(`  - Found ${exactMatchMrs.length} GitLab MRs with exact title match (expected 1). Skipping.`);
+                  continue;
+                }
+                const mr = exactMatchMrs[0];
+                console.log(`  - Found corresponding GitLab MR #${mr.iid}.`);
+
+                // Get the latest pipeline status for the found MR
+                const gitlabPipelineUrl = `${GITLAB_API_URL}/projects/${encodedProjectPath}/merge_requests/${mr.iid}/pipelines`;
+                const pipelineResponse = await fetch(gitlabPipelineUrl, { headers: { 'PRIVATE-TOKEN': GITLAB_API_TOKEN } });
+                if (!pipelineResponse.ok) throw new Error(`GitLab Pipeline fetch failed: ${pipelineResponse.statusText}`);
+                const pipelineData = await pipelineResponse.json();
+
+                if (!pipelineData || pipelineData.length === 0) {
+                  console.log(`  - No pipelines found for GitLab MR #${mr.iid}. Skipping.`);
+                  continue;
+                }
+
+                const latestPipelineStatus = pipelineData[0].status;
+                if (latestPipelineStatus !== 'success') {
+                  console.log(`  - GitLab MR #${mr.iid} latest pipeline status is not 'success' ('${latestPipelineStatus}'). Skipping.`);
+                  continue;
+                }
+                console.log(`  - GitLab MR #${mr.iid} latest pipeline status is 'success'.`);
+
+                console.log(`  - PR #${pr.number} is eligible for merge.`);
+                eligiblePrs.push(pr.number);
+
+              } catch (error) {
+                console.error(`  - Error checking GitLab MR/Pipeline for PR #${pr.number}: ${error.message}`);
+                // Optionally decide if this error should stop the whole process or just skip the PR
+                continue; // Skip this PR on error
+              }
+            }
+
+            console.log(`Eligible PRs for merging: ${JSON.stringify(eligiblePrs)}`);
+            // Set the output for the next step
+            core.setOutput('mergeable_pr_list', JSON.stringify(eligiblePrs));
+          result-encoding: json # Ensure the output is properly encoded
+
+      - name: Merge PRs sequentially
+        id: merge_prs
+        # Only run if the previous step found mergeable PRs
+        if: fromJson(steps.filter_prs.outputs.result).mergeable_pr_list != '[]'
+        env:
+           # Pass the output from the previous step
+           MERGEABLE_PRS_JSON: ${{ steps.filter_prs.outputs.result }}
+        run: |
+          # Extract the list from the JSON output of the previous step
+          mergeable_pr_list=$(echo "$MERGEABLE_PRS_JSON" | jq -r '.mergeable_pr_list')
+          successful_prs=()
+          merge_error=""
+
+          echo "=== Attempting to Merge PRs ==="
+          echo "PRs to merge: $mergeable_pr_list"
+
+          # Check if gh is authenticated (might be needed depending on token permissions)
+          gh auth status || echo "Warning: gh CLI might not be fully authenticated."
+
+          for pr_number in $(echo "$mergeable_pr_list" | jq -r '.[]'); do
+            echo "Attempting to merge PR #${pr_number}..."
+            # Use GitHub CLI to merge.
+            if gh pr merge "$pr_number" --merge --delete-branch; then
+              echo "  - PR #${pr_number} merged successfully."
+              successful_prs+=("$pr_number")
+            else
+              echo "::error::Failed to merge PR #${pr_number}. Stopping further merges."
+              merge_error="Failed to merge PR #${pr_number}. Check workflow logs and PR status on GitHub."
+              # Attempt to get more details about the failure
+              gh pr view "$pr_number" --json state,mergeStateStatus,mergeable || echo "Could not get PR details."
+              break # Stop merging on the first failure
+            fi
+          done
+
+          # Output results as JSON array string and error string
+          successful_prs_list_json=$(jq -c -n '$ARGS.positional' --args "${successful_prs[@]}")
+          echo "Successfully merged PRs: $successful_prs_list_json"
+          echo "successful_prs_list=${successful_prs_list_json}" >> "$GITHUB_OUTPUT"
+          echo "merge_error=$merge_error" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger GitLab Finalize Sync Pipeline
+        # Always run this step to report back to GitLab
+        if: always()
+        env:
+           # Get outputs, default to empty/[] if merge step was skipped or failed partially
+           SUCCESSFUL_PRS_JSON: ${{ steps.merge_prs.outputs.successful_prs_list || '[]' }}
+           MERGE_ERROR_MSG: ${{ steps.merge_prs.outputs.merge_error || '' }}
+           # Pass project path to this step's env
+           GITLAB_PROJECT_PATH: ${{ secrets.GITLAB_PROJECT_PATH }}
+           GITLAB_API_URL: ${{ secrets.GITLAB_API_URL }}
+           GITLAB_PIPELINE_TRIGGER_TOKEN: ${{ secrets.GITLAB_PIPELINE_TRIGGER_TOKEN }}
+        run: |
+          echo "=== Triggering GitLab Finalize Sync Pipeline ==="
+          successful_prs=$SUCCESSFUL_PRS_JSON
+          merge_error=$MERGE_ERROR_MSG
+
+          echo "Successful PRs (JSON): $successful_prs"
+          echo "Merge Error: $merge_error"
+
+          # Construct the JSON payload for the GitLab trigger variable
+          MERGE_RESULTS_JSON=$(jq -c -n --argjson sp "$successful_prs" --arg err "$merge_error" '{successful_prs: $sp, error: $err}')
+
+          echo "Triggering GitLab pipeline with payload: $MERGE_RESULTS_JSON"
+
+          # URL-encode the project path
+          ENCODED_PROJECT_PATH=$(python3 -c "import urllib.parse; print(urllib.parse.quote(input(), safe=''))" <<< "$GITLAB_PROJECT_PATH")
+
+          # Use curl to trigger the GitLab pipeline
+          gitlab_trigger_url="${GITLAB_API_URL}/projects/${ENCODED_PROJECT_PATH}/trigger/pipeline"
+          curl -f --request POST \
+            --form "token=${GITLAB_PIPELINE_TRIGGER_TOKEN}" \
+            --form "ref=${TARGET_BRANCH}" \
+            --form "variables[MERGE_RESULTS]=${MERGE_RESULTS_JSON}" \
+            "${gitlab_trigger_url}"
+
+          echo "GitLab finalize pipeline triggered."

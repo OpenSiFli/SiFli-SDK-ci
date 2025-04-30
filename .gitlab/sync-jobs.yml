@@ -1,0 +1,185 @@
+# .gitlab/sync-jobs.yml
+# Contains the actual CI job definitions for the sync process
+
+variables:
+  # --- User Configuration ---
+  # 请在 GitLab CI/CD 设置中配置这些变量
+  # GITHUB_TOKEN: "YOUR_GITHUB_PAT" (具有 repo 读写和 PR 合并权限, Protected, Masked)
+  # GITHUB_OWNER_REPO: "your_github_owner/your_github_repo" (例如: OpenSiFli/sync-pr-to-gitlab)
+  # GITHUB_ACTOR: "your-github-username-or-bot" (用于 GitHub 提交的用户名)
+  # GITLAB_PROJECT_ID: "YOUR_GITLAB_PROJECT_ID"
+  # GITLAB_API_URL: "https://gitlab.com/api/v4" (或你的自托管实例 API 地址)
+  # GITLAB_PIPELINE_TRIGGER_TOKEN: "YOUR_GITLAB_TRIGGER_TOKEN" (在 Settings > CI/CD > Pipeline triggers 创建)
+  # GITLAB_API_TOKEN: "YOUR_GITLAB_API_TOKEN" (具有 API 访问权限, Protected, Masked)
+
+  # --- Internal Variables ---
+  GIT_STRATEGY: clone # 确保每次都全新克隆
+  GIT_DEPTH: 0 # 克隆完整历史
+  TARGET_BRANCH: main # 定义目标同步分支，方便修改
+
+trigger_github_actions:
+  stage: trigger_sync
+  # 触发方式: manual (手动), schedule (定时), or on push to specific branches
+  when: manual # 初始设置为手动触发，方便测试
+  image: ubuntu:22.04 # 使用 Ubuntu 22.04 镜像
+  before_script:
+    # 更新 apt 包列表并安装必要的工具
+    - apt-get update && apt-get install -y --no-install-recommends git curl jq ca-certificates
+    - git config --global user.email "gitlab-ci@example.com" # 设置 Git 提交者信息
+    - git config --global user.name "GitLab CI Sync Bot"
+  script:
+    - echo "=== Starting GitLab to GitHub Sync ==="
+    - echo "Target Branch: ${TARGET_BRANCH}"
+    # 检查必要的变量是否设置
+    - |
+      set -e # Exit immediately if a command exits with a non-zero status.
+      if [ -z "${GITHUB_TOKEN}" ] || [ -z "${GITHUB_OWNER_REPO}" ] || [ -z "${GITHUB_ACTOR}" ]; then
+        echo "Error: Required GitHub variables (GITHUB_TOKEN, GITHUB_OWNER_REPO, GITHUB_ACTOR) are not set."
+        exit 1
+      fi
+      if [ -z "${GITLAB_PROJECT_ID}" ] || [ -z "${GITLAB_API_URL}" ] || [ -z "${GITLAB_PIPELINE_TRIGGER_TOKEN}" ] || [ -z "${GITLAB_API_TOKEN}" ]; then
+        echo "Error: Required GitLab variables (GITLAB_PROJECT_ID, GITLAB_API_URL, GITLAB_PIPELINE_TRIGGER_TOKEN, GITLAB_API_TOKEN) are not set."
+        exit 1
+      fi
+      echo "All required variables are set."
+
+    - echo "1. Cloning GitLab repository (${TARGET_BRANCH})..."
+    # 使用 CI_JOB_TOKEN 进行认证克隆
+    - git clone --branch ${TARGET_BRANCH} "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_REPOSITORY_URL#https://}" repo
+    - cd repo
+
+    - echo "2. Adding GitHub remote..."
+    # 从 GITHUB_OWNER_REPO 变量构造 GitHub 仓库 URL
+    - GITHUB_REPO_URL="github.com/${GITHUB_OWNER_REPO}.git"
+    - git remote add github "https://${GITHUB_ACTOR}:${GITHUB_TOKEN}@${GITHUB_REPO_URL}"
+
+    - echo "3. Pushing GitLab ${TARGET_BRANCH} to GitHub ${TARGET_BRANCH}... (using --force)"
+    # 将当前 GitLab 分支强制推送到 GitHub 对应的分支
+    # 警告: --force 会覆盖 GitHub 上的历史记录。确保这是期望的行为。
+    # 考虑使用 --force-with-lease=refs/heads/${TARGET_BRANCH} 增加安全性
+    - git push github ${TARGET_BRANCH} --force
+
+    - echo "4. Triggering GitHub Actions workflow (repository_dispatch)..."
+    # 触发 GitHub Actions 中的 'start_pr_merge_sync' 事件
+    # 使用 jq 安全地构造 JSON payload
+    # - JSON_PAYLOAD=$(jq -n --arg pipeline_id "$CI_PIPELINE_ID" '{event_type: "start_pr_merge_sync", client_payload: {gitlab_pipeline_id: $pipeline_id}}')
+    # 使用多行脚本块执行 curl
+    - |
+      JSON_PAYLOAD=$(jq -n --arg pipeline_id "$CI_PIPELINE_ID" '{event_type: "start_pr_merge_sync", client_payload: {gitlab_pipeline_id: $pipeline_id}}')
+      set -e
+      echo "Payload: $JSON_PAYLOAD"
+      curl -f -X POST \
+        -H "Accept: application/vnd.github.v3+json" \
+        -H "Authorization: token ${GITHUB_TOKEN}" \
+        "https://api.github.com/repos/${GITHUB_OWNER_REPO}/dispatches" \
+        -d "$JSON_PAYLOAD"
+
+    - echo "=== GitLab to GitHub Sync Triggered Successfully ==="
+  artifacts:
+    expire_in: 1 day # 保留作业日志
+
+finalize_sync_from_github:
+  stage: finalize_sync
+  image: ubuntu:22.04 # 使用 Ubuntu 22.04 镜像
+  rules:
+    # 仅当流水线由触发器启动且包含 MERGE_RESULTS 变量时运行
+    - if: '$CI_PIPELINE_SOURCE == "trigger" && $MERGE_RESULTS'
+  before_script:
+    # 更新 apt 包列表并安装必要的工具
+    - apt-get update && apt-get install -y --no-install-recommends git curl jq ca-certificates
+    - git config --global user.email "gitlab-ci@example.com"
+    - git config --global user.name "GitLab CI Sync Bot"
+  script:
+    - echo "=== Finalizing Sync from GitHub ==="
+    - echo "Received merge results: $MERGE_RESULTS"
+    # 解析从 GitHub Actions 传递过来的结果
+    - |
+      set -e
+      # 假设 MERGE_RESULTS 是 JSON 字符串: {"successful_prs": [123, 456], "error": "Optional error message"}
+      SUCCESSFUL_PRS=$(echo "$MERGE_RESULTS" | jq -r '.successful_prs // [] | .[]')
+      MERGE_ERROR=$(echo "$MERGE_RESULTS" | jq -r '.error // ""')
+
+      if [ -n "$MERGE_ERROR" ]; then
+        echo "Error reported from GitHub Actions during PR merge: $MERGE_ERROR"
+        # 在此添加错误通知逻辑 (例如: 发送邮件, 调用 webhook 等)
+        # 注意：即使有错误，我们仍然会尝试同步 GitHub 的当前状态
+      fi
+
+    - echo "1. Cloning GitLab repository (${TARGET_BRANCH})..."
+    - git clone --branch ${TARGET_BRANCH} "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_REPOSITORY_URL#https://}" repo
+    - cd repo
+
+    - echo "2. Adding GitHub remote..."
+    - GITHUB_REPO_URL="github.com/${GITHUB_OWNER_REPO}.git"
+    - git remote add github "https://${GITHUB_ACTOR}:${GITHUB_TOKEN}@${GITHUB_REPO_URL}"
+
+    - echo "3. Fetching latest ${TARGET_BRANCH} from GitHub..."
+    - git fetch github ${TARGET_BRANCH}
+
+    - echo "4. Resetting local ${TARGET_BRANCH} to GitHub's ${TARGET_BRANCH}... (using checkout -B)"
+    # 将本地分支指向 GitHub 的最新提交
+    - git checkout -B ${TARGET_BRANCH} github/${TARGET_BRANCH}
+
+    - echo "5. Pushing updated ${TARGET_BRANCH} back to GitLab... (using --force)"
+    # 使用 --force 推送，因为我们是从 GitHub 同步回来的权威状态
+    - git push origin ${TARGET_BRANCH} --force
+
+    - echo "6. Closing corresponding GitLab MRs for successful PRs..."
+    # 使用多行脚本块处理 MR 关闭逻辑
+    - |
+      set -e
+      # 需要重新解析，因为上一个脚本块的环境已结束
+      SUCCESSFUL_PRS=$(echo "$MERGE_RESULTS" | jq -r '.successful_prs // [] | .[]')
+
+      if [ -z "$SUCCESSFUL_PRS" ]; then
+        echo "No successful PRs reported by GitHub Actions."
+      else
+        # 获取所有状态为 opened 的 MRs
+        MR_LIST_URL="${GITLAB_API_URL}/projects/${GITLAB_PROJECT_ID}/merge_requests?state=opened&per_page=100"
+        echo "Fetching open MRs from: ${MR_LIST_URL}"
+        # 使用 curl -fsSL 使其在失败时不输出错误页面，并遵循重定向
+        curl -fsSL --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" "${MR_LIST_URL}" > mrs.json
+        if ! jq empty mrs.json > /dev/null 2>&1; then
+           echo "Error: Failed to fetch or parse GitLab MRs. Response:"
+           cat mrs.json
+           exit 1
+        fi
+
+        echo "$SUCCESSFUL_PRS" | while IFS= read -r pr_number; do
+          echo "Processing successful GitHub PR #${pr_number}..."
+          # 从 MR 描述中查找对应的 GitHub PR 链接 (需要 sync-pr-to-gitlab 工具添加类似标识)
+          # 假设描述中包含 "GitHub PR: https://github.com/owner/repo/pull/123"
+          GITHUB_PR_URL_PATTERN="github.com/${GITHUB_OWNER_REPO}/pull/${pr_number}"
+          # 使用 jq -e 选项，如果找不到匹配项则返回非零退出码
+          MR_IID=$(jq -e --arg pattern "$GITHUB_PR_URL_PATTERN" '.[] | select(.description | contains($pattern)) | .iid' mrs.json)
+
+          if [ $? -eq 0 ] && [ -n "$MR_IID" ]; then
+            echo "Found corresponding GitLab MR #${MR_IID}. Closing..."
+            # 获取当前 MR 描述，以便追加信息
+            # 使用 jq -e 确保找到 MR
+            CURRENT_DESC=$(jq -e --argjson iid "$MR_IID" '.[] | select(.iid == $iid) | .description' mrs.json)
+            if [ $? -ne 0 ]; then
+               echo "Warning: Could not retrieve description for MR #${MR_IID}. Skipping description update."
+               CURRENT_DESC="" # 或者保留原样，只改变状态
+            fi
+
+            # 使用 printf 安全地格式化新描述
+            printf -v NEW_DESC "%s\n\n*Closed automatically: Corresponding GitHub PR #%s merged.*" "$CURRENT_DESC" "$pr_number"
+
+            # 关闭 MR 并更新描述
+            CLOSE_MR_URL="${GITLAB_API_URL}/projects/${GITLAB_PROJECT_ID}/merge_requests/${MR_IID}"
+            echo "Closing MR via URL: ${CLOSE_MR_URL}"
+            curl -f --request PUT --header "PRIVATE-TOKEN: ${GITLAB_API_TOKEN}" \
+              "${CLOSE_MR_URL}" \
+              --data-urlencode "state_event=close" \
+              --data-urlencode "description=${NEW_DESC}"
+            echo # 添加换行符使输出更清晰
+            echo "  - Closed GitLab MR #${MR_IID}."
+          else
+            echo "Warning: Could not find corresponding open GitLab MR for successfully merged GitHub PR #${pr_number}. It might have been closed manually or the description format is unexpected."
+          fi
+        done
+      fi
+    - echo "=== Sync from GitHub Finalized ===="
+  artifacts:
+    expire_in: 1 day

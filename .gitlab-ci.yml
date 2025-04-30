@@ -1,0 +1,10 @@
+# .gitlab-ci.yml
+# Main GitLab CI configuration file
+
+stages:
+  - trigger_sync   # Stage for pushing to GitHub and triggering Actions
+  - finalize_sync  # Stage for pulling from GitHub and closing MRs
+
+include:
+  - local: '.gitlab/sync-jobs.yml' # Include the job definitions
+
