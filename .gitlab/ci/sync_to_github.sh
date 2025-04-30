@@ -23,7 +23,7 @@ echo "[INFO] 开始将GitLab分支 $BRANCH 推送到GitHub仓库 $GITHUB_REPO"
 git config --global user.email "si-bot@sifli.com"
 git config --global user.name "SiFli-bot"
 
-git remote add github-auth "https://${GITHUB_TOKEN}@https://github.com/${GITHUB_REPO#https://}"
+git remote add github-auth "https://${GITHUB_TOKEN}@github.com/${GITHUB_REPO}"
 git fetch origin "$BRANCH"
 git push github-auth "$BRANCH:$BRANCH" --force
 
