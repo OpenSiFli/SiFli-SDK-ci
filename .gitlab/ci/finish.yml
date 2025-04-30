@@ -1,5 +1,6 @@
 finish:
   stage: finish
+  tags: [docker]
   script:
     - echo "[finish] 解锁MR、通知团队等收尾脚本调用占位"
     - python3 .gitlab/ci/finish.py

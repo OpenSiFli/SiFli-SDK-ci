@@ -1,3 +1,12 @@
+# 只允许手动和定时触发
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: always
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: always
+    - when: never
+
 stages:
   - prepare
   - sync_to_github

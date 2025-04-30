@@ -1,5 +1,6 @@
 merge_github_pr:
   stage: merge_github_pr
+  tags: [docker]
   script:
     - echo "[merge_github_pr] 触发GitHub Action合并PR的脚本调用占位"
     - python3 .gitlab/ci/trigger_github_action.py
