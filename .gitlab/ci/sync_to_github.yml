@@ -1,0 +1,6 @@
+sync_to_github:
+  stage: sync
+  image: python:3.10
+  script:
+    - pip install -r tools/ci/requirements.txt
+    - python3 tools/ci/gitlab_to_github_sync.py
