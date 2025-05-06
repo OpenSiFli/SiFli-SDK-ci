@@ -1,6 +1,8 @@
 sync_to_github:
   stage: sync_to_github
   image: python:3.10
+  tags:
+    - build
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   script:
