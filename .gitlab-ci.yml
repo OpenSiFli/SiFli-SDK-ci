@@ -10,12 +10,6 @@ workflow:
 stages:
   - prepare
   - sync_to_github
-  - merge_github_pr
-  - sync_from_github
-  - finish
 
 include:
   - local: '.gitlab/ci/sync_to_github.yml'
-  - local: '.gitlab/ci/merge_github_pr.yml'
-  - local: '.gitlab/ci/sync_from_github.yml'
-  - local: '.gitlab/ci/finish.yml'

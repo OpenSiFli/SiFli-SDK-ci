@@ -2,9 +2,11 @@ import os
 import sys
 from github import Github
 import gitlab
+import git
 
 GITHUB_TOKEN = os.environ.get('GITHUB_TOKEN')
 GITHUB_REPO = os.environ.get('GITHUB_REPO')
+GITLAB_BRANCH = os.environ.get('GITLAB_BRANCH', 'main')
 GITHUB_BRANCH = os.environ.get('GITHUB_BRANCH', 'main')
 GITLAB_URL = os.environ.get('GITLAB_URL')
 GITLAB_TOKEN = os.environ.get('GITLAB_TOKEN')
@@ -26,7 +28,7 @@ if not queue_prs:
     sys.exit(0)
 
 # 连接GitLab
-gl = gitlab.Gitlab(GITLAB_URL, private_token=GITLAB_TOKEN)
+gl = gitlab.Gitlab(f"https://{GITLAB_URL}", private_token=GITLAB_TOKEN)
 project = gl.projects.get(GITLAB_REPO)
 gitlab_mrs = project.mergerequests.list(state='opened', search='(GitHub PR)')
 
@@ -58,3 +60,13 @@ for pr in queue_prs:
         print(f'GitLab MR #{gitlab_mr.iid} 已关闭')
     except Exception as e:
         print(f'关闭GitLab MR #{gitlab_mr.iid} 失败: {e}')
+
+# 将修改之后的代码推送到Gitlab
+try:
+    git_repo = git.Repo(os.getcwd())
+    gitlab_url = f'https://{GITLAB_TOKEN}@{GITLAB_URL}/{GITLAB_REPO}.git'
+    git_repo.git.pull(gitlab_url, f'{GITLAB_BRANCH}:{GITHUB_BRANCH}', force=True)
+    print('代码已推送到GitLab')
+except Exception as e:
+    print(f'推送到GitLab失败: {e}')
+    sys.exit(1)

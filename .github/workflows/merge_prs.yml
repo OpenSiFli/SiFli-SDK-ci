@@ -3,9 +3,16 @@ name: Batch Merge PRs from GitLab
 on:
   workflow_dispatch:
 
-
 jobs:
   merge_prs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: 'true'
+
+      - name: Merge PRs
+        run: |
+          cd tools/ci
+          pip install -r requirements.txt
+          python merge_github_prs.py
