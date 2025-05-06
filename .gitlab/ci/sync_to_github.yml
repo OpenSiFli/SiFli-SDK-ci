@@ -1,6 +1,8 @@
 sync_to_github:
   stage: sync_to_github
   image: python:3.10
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
   script:
     - pip install -r tools/ci/requirements.txt
     - python3 tools/ci/gitlab_to_github_sync.py
