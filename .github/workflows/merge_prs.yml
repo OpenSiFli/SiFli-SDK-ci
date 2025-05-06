@@ -2,36 +2,10 @@ name: Batch Merge PRs from GitLab
 
 on:
   workflow_dispatch:
-    inputs:
-      pr_numbers:
-        description: '待合并PR编号(JSON数组)'
-        required: true
-        type: string
+
 
 jobs:
   merge_prs:
     runs-on: ubuntu-latest
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 设置Python环境
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: 安装依赖
-        run: pip install requests
-
-      - name: 批量合并PR
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBERS: ${{ github.event.inputs.pr_numbers }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-        run: python3 .github/scripts/merge_prs.py
-
-      - name: 上传合并结果
-        uses: actions/upload-artifact@v4
-        with:
-          name: merged_prs
-          path: merged_prs.json
+      - uses: actions/checkout@v4

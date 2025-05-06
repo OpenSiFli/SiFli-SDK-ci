@@ -26,7 +26,9 @@ try:
     print('同步完成')
     # 触发GitHub Actions
     workflow = g.get_repo(GITHUB_REPO).get_workflow('merge_prs.yml')
-    workflow.create_dispatch(GITHUB_BRANCH)
+    if not workflow.create_dispatch(GITHUB_BRANCH):
+        print('GitHub Actions触发失败')
+        sys.exit(1)
 
 except GitCommandError as e:
     print(f'推送失败: {e}')
