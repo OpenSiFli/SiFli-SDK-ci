@@ -1,5 +1,5 @@
 sync_to_github:
-  stage: sync
+  stage: sync_to_github
   image: python:3.10
   script:
     - pip install -r tools/ci/requirements.txt
