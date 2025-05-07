@@ -64,7 +64,7 @@ for pr in queue_prs:
 # 将修改之后的代码推送到Gitlab
 try:
     git_repo = git.Repo(os.getcwd())
-    gitlab_url = f'https://{GITLAB_TOKEN}@{GITLAB_URL}/{GITLAB_REPO}.git'
+    gitlab_url = f'https://SiFli-bot:{GITLAB_TOKEN}@{GITLAB_URL}/{GITLAB_REPO}.git'
     git_repo.git.pull(gitlab_url, f'{GITLAB_BRANCH}:{GITHUB_BRANCH}', force=True)
     print('代码已推送到GitLab')
 except Exception as e:
