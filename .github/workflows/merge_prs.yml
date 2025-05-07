@@ -15,15 +15,6 @@ jobs:
           fetch-depth: 0
           submodules: 'true'
       
-      - name: Setup tmate session
-        uses: mxschmitt/action-tmate@v3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-          GITLAB_URL: ${{ secrets.GITLAB_URL }}
-          GITLAB_REPO: ${{ secrets.GITLAB_REPO }}
-          GITHUB_REPO: OpenSiFli/SiFli-SDK-ci
-
       - name: Merge PRs
         run: |
           pip install -r tools/ci/requirements.txt
