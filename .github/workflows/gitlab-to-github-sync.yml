@@ -12,8 +12,6 @@ jobs:
             with:
               submodules: 'true'
               fetch-depth: 0
-          - name: Setup tmate session
-            uses: mxschmitt/action-tmate@v3
 
           - name: fetch gitlab repo
             run: |
