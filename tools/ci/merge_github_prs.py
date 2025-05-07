@@ -23,9 +23,9 @@ repo = g.get_repo(GITHUB_REPO)
 prs = repo.get_pulls(state='open', base=GITHUB_BRANCH)
 queue_prs = [pr for pr in prs]
 
-if not queue_prs:
-    print('没有待合并的PR')
-    sys.exit(0)
+# if not queue_prs:
+#     print('没有待合并的PR')
+#     sys.exit(0)
 
 # 连接GitLab
 gl = gitlab.Gitlab(f"https://{GITLAB_URL}", private_token=GITLAB_TOKEN)
@@ -65,7 +65,7 @@ for pr in queue_prs:
 try:
     git_repo = git.Repo(os.getcwd())
     gitlab_url = f'https://SiFli-bot:{GITLAB_TOKEN}@{GITLAB_URL}/{GITLAB_REPO}.git'
-    git_repo.git.pull(gitlab_url, f'{GITLAB_BRANCH}:{GITHUB_BRANCH}', force=True)
+    git_repo.git.push(gitlab_url, f'{GITLAB_BRANCH}:{GITHUB_BRANCH}', force=True)
     print('代码已推送到GitLab')
 except Exception as e:
     print(f'推送到GitLab失败: {e}')
