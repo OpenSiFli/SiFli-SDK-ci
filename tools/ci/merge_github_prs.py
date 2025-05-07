@@ -65,7 +65,8 @@ for pr in queue_prs:
 try:
     git_repo = git.Repo(os.getcwd())
     gitlab_url = f'https://SiFli-bot:{GITLAB_TOKEN}@{GITLAB_URL}/{GITLAB_REPO}.git'
-    git_repo.git.push(gitlab_url, f'{GITLAB_BRANCH}:{GITHUB_BRANCH}', force=True)
+    git_repo.git.remote('add', 'gitlab', gitlab_url)
+    git_repo.git.push('gitlab', f'{GITHUB_BRANCH}:{GITLAB_BRANCH}', force=True)
     print('代码已推送到GitLab')
 except Exception as e:
     print(f'推送到GitLab失败: {e}')
