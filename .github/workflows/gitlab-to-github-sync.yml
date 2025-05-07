@@ -3,10 +3,11 @@ name: GitLab to GitHub Sync
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+  
 jobs:
   sync_to_github:
-    permissions:
-      contents: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
