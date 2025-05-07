@@ -5,7 +5,8 @@ on:
 
 permissions:
   contents: write
-  
+  actions: write
+
 jobs:
   sync_to_github:
     runs-on: ubuntu-latest
