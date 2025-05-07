@@ -20,16 +20,21 @@ if not all([GITHUB_TOKEN, GITHUB_REPO]):
 repo = Repo(os.getcwd())
 github_url = f'https://{GITHUB_TOKEN}@github.com/{GITHUB_REPO}.git'
 
-try:
-    print(f'推送到GitHub分支 {GITHUB_BRANCH}...')
-    repo.git.push(github_url, f'{GITLAB_BRANCH}:{GITHUB_BRANCH}', force=True)
-    print('同步完成')
-    # 触发GitHub Actions
-    workflow = g.get_repo(GITHUB_REPO).get_workflow('merge_prs.yml')
-    if not workflow.create_dispatch(GITHUB_BRANCH):
-        print('GitHub Actions触发失败')
-        sys.exit(1)
-
-except GitCommandError as e:
-    print(f'推送失败: {e}')
+workflow = g.get_repo(GITHUB_REPO).get_workflow('gitlab-to-github-sync.yml')
+if not workflow.create_dispatch(GITHUB_BRANCH):
+    print('GitHub Actions触发失败')
     sys.exit(1)
+
+# try:
+#     print(f'推送到GitHub分支 {GITHUB_BRANCH}...')
+#     repo.git.push(github_url, f'{GITLAB_BRANCH}:{GITHUB_BRANCH}', force=True)
+#     print('同步完成')
+#     # 触发GitHub Actions
+#     workflow = g.get_repo(GITHUB_REPO).get_workflow('merge_prs.yml')
+#     if not workflow.create_dispatch(GITHUB_BRANCH):
+#         print('GitHub Actions触发失败')
+#         sys.exit(1)
+
+# except GitCommandError as e:
+#     print(f'推送失败: {e}')
+#     sys.exit(1)

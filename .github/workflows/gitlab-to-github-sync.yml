@@ -1,0 +1,32 @@
+name: GitLab to GitHub Sync
+
+on:
+  workflow_dispatch:
+
+jobs:
+    sync_to_github:
+        runs-on: ubuntu-latest
+        steps:
+          - name: Checkout code
+            uses: actions/checkout@v4
+            with:
+              submodules: 'true'
+              fetch-depth: 0
+
+          - name: fetch gitlab repo
+            run: |
+              git add remote gitlab https://${{GITLAB_TOKEN}}@${{GITLAB_URL}}/${{GITLAB_REPO}}.git
+              git fetch gitlab
+              git push origin gitlab/main:main
+          
+          - name: create dispatch merge
+            uses: actions/github-script@v7
+            with:
+              script: |
+                await github.actions.createWorkflowDispatch({
+                  owner: context.repo.owner,
+                  repo:  context.repo.repo,
+                  workflow_id: 'merge_prs.yml',
+                  ref: context.ref,
+                  inputs: null
+                })
