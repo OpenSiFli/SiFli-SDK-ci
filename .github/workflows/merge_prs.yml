@@ -3,6 +3,9 @@ name: Batch Merge PRs from GitLab
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   merge_prs:
     runs-on: ubuntu-latest
