@@ -23,9 +23,9 @@ repo = g.get_repo(GITHUB_REPO)
 prs = repo.get_pulls(state='open', base=GITHUB_BRANCH)
 queue_prs = [pr for pr in prs]
 
-# if not queue_prs:
-#     print('没有待合并的PR')
-#     sys.exit(0)
+if not queue_prs:
+    print('没有待合并的PR')
+    sys.exit(0)
 
 # 连接GitLab
 gl = gitlab.Gitlab(f"https://{GITLAB_URL}", private_token=GITLAB_TOKEN)
