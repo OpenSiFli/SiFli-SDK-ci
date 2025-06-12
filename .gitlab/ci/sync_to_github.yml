@@ -1,6 +1,6 @@
 sync_to_github:
-  stage: gitlab.sifli.com:5050/sw/sifli-docker-base:latest
-  image: ubuntu:22.04
+  stage: sync_to_github
+  image: gitlab.sifli.com:5050/sw/sifli-docker-base:latest
   tags:
     - docker
   variables:
