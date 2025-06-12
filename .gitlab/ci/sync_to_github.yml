@@ -8,6 +8,16 @@ sync_to_github:
   before_script:
     # 安装必要的依赖
     - apt-get update && apt-get install -y git openssh-client curl jq
+    # 安装 GitHub CLI
+    - |
+      (type -p wget >/dev/null || (sudo apt update && sudo apt-get install wget -y)) \
+        && sudo mkdir -p -m 755 /etc/apt/keyrings \
+              && out=$(mktemp) && wget -nv -O$out https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+              && cat $out | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null \
+        && sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+        && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+        && sudo apt update \
+        && sudo apt install gh -y
     # 启动SSH Agent
     - eval $(ssh-agent -s)
     # 添加SSH私钥（base64编码格式）
@@ -20,6 +30,8 @@ sync_to_github:
     # 配置Git用户信息
     - git config --global user.name "$GIT_CI_USER_NAME"
     - git config --global user.email "$GIT_CI_USER_EMAIL"
+    # 配置 GitHub CLI 认证
+    - gh auth login --with-token <<< "$GITHUB_APP_TOKEN"
   script:
     - |
       # 添加GitHub远程仓库（使用SSH）
@@ -45,19 +57,12 @@ sync_to_github:
     - |
       # 触发GitHub Action
       echo "Triggering GitHub Action merge_prs workflow..."
-      RESPONSE=$(curl -L \
-        -X POST \
-        -H "Accept: application/vnd.github+json" \
-        -H "Authorization: Bearer $GITHUB_APP_TOKEN" \
-        -H "X-GitHub-Api-Version: 2022-11-28" \
-        https://api.github.com/repos/OpenSiFli/SiFli-SDK/actions/workflows/merge_prs.yml/dispatches \
-        -d '{"ref":"'$CURRENT_BRANCH'"}')
+      gh workflow run merge_prs.yml --repo ${GITHUB_REPO} --ref "$CURRENT_BRANCH"
       
       if [ $? -eq 0 ]; then
         echo "✅ GitHub Action triggered successfully"
       else
         echo "❌ Failed to trigger GitHub Action"
-        echo "Response: $RESPONSE"
         exit 1
       fi
 
