@@ -1,6 +1,6 @@
 sync_to_github:
   stage: sync_to_github
-  image: gitlab.sifli.com:5050/sw/sifli-docker-base:latest
+  image: $CI_DOCKER_BASE_REGISTRY:latest
   tags:
     - docker
   variables:
