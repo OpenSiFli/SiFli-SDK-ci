@@ -19,7 +19,7 @@ sync_to_github:
     - git config --global user.name "$GIT_CI_USER_NAME"
     - git config --global user.email "$GIT_CI_USER_EMAIL"
     - |
-      gh_token = $(gh-token generate \
+      gh_token=$(gh-token generate \
           --base64-key "$GITHUB_APPS_PRIVATE_KEY" \
           --app-id $GITHUB_APPS_ID \
           --installation-id $GITHUB_APPS_INSTALLATION_ID \
